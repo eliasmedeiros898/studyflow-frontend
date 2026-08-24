@@ -918,14 +918,37 @@ function Modal({ type, subjects, isDemo, focusMinutes, defaultTaskDate, close, a
 
 function OnboardingScreen({ user, onComplete, onLogout }: { user: User; onComplete: (user: User, subjects: Subject[]) => void; onLogout: () => void }) {
   const [selected, setSelected] = useState(["Matemática", "Linguagens", "Redação"]);
+  const [timezone, setTimezone] = useState(user.timezone);
+  const [customSubject, setCustomSubject] = useState("");
+  const [customSubjects, setCustomSubjects] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const toggle = (name: string) => setSelected(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]);
+  const addCustomSubject = () => {
+    const name = customSubject.trim().replace(/\s+/g, " ");
+    if (!name) return;
+    if (name.length > 80) { setError("O nome da disciplina deve ter no máximo 80 caracteres."); return; }
+    const suggestedMatch = suggestedSubjects.find(item => item.toLocaleLowerCase("pt-BR") === name.toLocaleLowerCase("pt-BR"));
+    const customMatch = customSubjects.find(item => item.toLocaleLowerCase("pt-BR") === name.toLocaleLowerCase("pt-BR"));
+    const existing = suggestedMatch ?? customMatch;
+    if (existing) {
+      setSelected(current => current.includes(existing) ? current : [...current, existing]);
+      setCustomSubject(""); setError(""); return;
+    }
+    setCustomSubjects(current => [...current, name]);
+    setSelected(current => [...current, name]);
+    setCustomSubject(""); setError("");
+  };
+  const removeCustomSubject = (name: string) => {
+    setCustomSubjects(current => current.filter(item => item !== name));
+    setSelected(current => current.filter(item => item !== name));
+  };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError("");
     if (!selected.length) { setError("Escolha pelo menos uma disciplina para começar."); return; }
-    setSubmitting(true);
     const data = new FormData(event.currentTarget);
+    if (!data.get("targetExamDate")) { setError("Escolha a data da prova."); return; }
+    setSubmitting(true);
     try {
       const profileResponse = await fetch(`${API_URL}/profile`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -944,8 +967,9 @@ function OnboardingScreen({ user, onComplete, onLogout }: { user: User; onComple
   return <main className="onboarding-page">
     <header className="onboarding-header"><div className="brand"><span><Zap size={21} fill="currentColor" /></span>StudyFlow</div><button onClick={onLogout}>Sair</button></header>
     <section className="onboarding-card"><div className="onboarding-copy"><span className="eyebrow">CONFIGURAÇÃO INICIAL</span><h1>Vamos transformar sua meta em um plano.</h1><p>Conte qual prova está no horizonte e escolha as primeiras disciplinas. Você poderá mudar tudo depois.</p><div className="onboarding-steps"><span className="done"><Check />Conta criada</span><span><Target />Objetivo e matérias</span><span><Sparkles />Painel personalizado</span></div></div>
-      <form onSubmit={submit}><div className="form-section"><div className="section-number">1</div><div><h2>Qual é o seu objetivo?</h2><p>Usaremos a data para mostrar o tempo restante.</p></div></div><label>Nome da prova<input name="targetExamName" required maxLength={120} placeholder="Ex.: ENEM 2026" autoFocus /></label><div className="form-row"><label>Data da prova<input name="targetExamDate" type="date" min={dateInTimezone(user.timezone)} required /></label><label>Seu fuso horário<select name="timezone" defaultValue={user.timezone}><option value="America/Sao_Paulo">Brasília</option><option value="America/Manaus">Manaus</option><option value="America/Cuiaba">Cuiabá</option><option value="America/Rio_Branco">Rio Branco</option><option value="America/Noronha">Fernando de Noronha</option></select></label></div>
+      <form onSubmit={submit}><div className="form-section"><div className="section-number">1</div><div><h2>Qual é o seu objetivo?</h2><p>Usaremos a data para mostrar o tempo restante.</p></div></div><label>Nome da prova<input name="targetExamName" required maxLength={120} placeholder="Ex.: ENEM 2026" autoFocus /></label><div className="form-row"><DateField label="Data da prova" name="targetExamDate" min={dateInTimezone(timezone)} /><AppSelect label="Seu fuso horário" name="timezone" value={timezone} onChange={setTimezone} options={[{ value: "America/Sao_Paulo", label: "Brasília" }, { value: "America/Manaus", label: "Manaus" }, { value: "America/Cuiaba", label: "Cuiabá" }, { value: "America/Rio_Branco", label: "Rio Branco" }, { value: "America/Noronha", label: "Fernando de Noronha" }]} /></div>
         <div className="form-section subjects-step"><div className="section-number">2</div><div><h2>O que você vai estudar?</h2><p>Selecione uma ou mais disciplinas para montar seu espaço.</p></div></div><div className="subject-options">{suggestedSubjects.map((name, index) => <button type="button" key={name} className={selected.includes(name) ? "selected" : ""} onClick={() => toggle(name)}><i style={{ background: palette[index % palette.length] }}>{name[0]}</i><span>{name}</span>{selected.includes(name) && <Check />}</button>)}</div>
+        <section className="custom-subject-section" aria-labelledby="custom-subject-title"><div><strong id="custom-subject-title">Não encontrou sua disciplina?</strong><small>Adicione matérias de qualquer área, como Direito Penal ou Anatomia.</small></div><div className="custom-subject-entry"><input value={customSubject} onChange={event => setCustomSubject(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addCustomSubject(); } }} maxLength={80} placeholder="Nome da disciplina" aria-label="Nome da disciplina personalizada" /><button type="button" onClick={addCustomSubject} disabled={!customSubject.trim()}><Plus />Adicionar</button></div>{customSubjects.length > 0 && <div className="custom-subject-list" aria-label="Disciplinas adicionadas manualmente">{customSubjects.map((name, index) => <span key={name}><i style={{ background: palette[(suggestedSubjects.length + index) % palette.length] }}>{name[0]}</i>{name}<button type="button" onClick={() => removeCustomSubject(name)} aria-label={`Remover ${name}`}><X /></button></span>)}</div>}</section>
         {error && <p className="form-error">{error}</p>}<button className="primary onboarding-submit" disabled={submitting}>{submitting ? "Preparando seu painel…" : "Criar meu plano inicial"}<ChevronRight /></button>
       </form>
     </section>
