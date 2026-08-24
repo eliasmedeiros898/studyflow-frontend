@@ -86,20 +86,21 @@ export default function HomePage() {
   const [taskDefaultDate, setTaskDefaultDate] = useState(today);
   const [taskRevision, setTaskRevision] = useState(0);
   const [studyTask, setStudyTask] = useState<Task | null>(null);
+  const [sessionTask, setSessionTask] = useState<Task | null>(null);
   const [notice, setNotice] = useState("");
   const [notificationCenter, setNotificationCenter] = useState<NotificationCenterData>(demoNotificationCenter);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusPreferences, setFocusPreferences] = useState<AccountPreferences>(defaultFocusSettings);
 
   const prepareAuthenticatedAccount = useCallback((nextUser: User) => {
-    setUser(nextUser); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null);
+    setUser(nextUser); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null); setSessionTask(null);
     setModal(null); setActive("Início"); setFocusMinutes(defaultFocusSettings.focusMinutes); setFocusPreferences(defaultFocusSettings);
     setNotificationCenter({ unreadCount: 0, notifications: [] }); setNotificationsOpen(false); setMobileMenu(false); setNotice("");
     setAuthState("authenticated");
   }, []);
 
   const prepareDemoAccount = useCallback(() => {
-    setUser(null); setDashboard(demoDashboard); setSubjects(demoSubjects); setTasks(demoTasks); setStudyTask(null);
+    setUser(null); setDashboard(demoDashboard); setSubjects(demoSubjects); setTasks(demoTasks); setStudyTask(null); setSessionTask(null);
     setModal(null); setActive("Início"); setFocusMinutes(defaultFocusSettings.focusMinutes); setFocusPreferences(defaultFocusSettings);
     setNotificationCenter(demoNotificationCenter); setNotificationsOpen(false); setMobileMenu(false); setNotice("");
     setAuthState("demo");
@@ -163,18 +164,20 @@ export default function HomePage() {
       correctAnswers: current.correctAnswers + correct,
       accuracy: current.questionsAnswered + questions === 0 ? 0 : Math.round((current.correctAnswers + correct) * 100 / (current.questionsAnswered + questions)),
     }));
-    if (studyTask && !studyTask.completed) {
-      setTasks(current => current.map(task => task.id === studyTask.id ? { ...task, completed: true } : task));
-      if (authState === "authenticated") fetch(`${API_URL}/tasks/${studyTask.id}/toggle`, { method: "PATCH" }).then(response => {
+    const linkedTask = sessionTask ?? studyTask;
+    if (linkedTask && !linkedTask.completed) {
+      setTasks(current => current.map(task => task.id === linkedTask.id ? { ...task, completed: true } : task));
+      if (authState === "authenticated") fetch(`${API_URL}/tasks/${linkedTask.id}/toggle`, { method: "PATCH" }).then(response => {
         if (!response.ok) throw new Error();
       }).catch(() => {
-        setTasks(current => current.map(task => task.id === studyTask.id ? { ...task, completed: false } : task));
+        setTasks(current => current.map(task => task.id === linkedTask.id ? { ...task, completed: false } : task));
         showNotice("A sessão foi salva, mas não foi possível concluir a tarefa.");
       });
     }
     if (scheduledReview) setTaskRevision(value => value + 1);
     setModal(null);
     setStudyTask(null);
+    setSessionTask(null);
     if (active === "Foco") window.dispatchEvent(new Event("studyflow-focus-saved"));
     showNotice(scheduledReview ? `Sessão salva. Revisão agendada para ${formatShortDate(scheduledReview.date)}.` : "Sessão registrada. Seu progresso foi atualizado!");
   };
@@ -182,7 +185,7 @@ export default function HomePage() {
   const logout = async () => {
     try { await fetch("/api/auth/logout", { method: "POST" }); }
     finally {
-      setUser(null); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null); setModal(null);
+      setUser(null); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null); setSessionTask(null); setModal(null);
       setActive("Início"); setNotificationCenter({ unreadCount: 0, notifications: [] }); setNotificationsOpen(false); setNotice("");
       setAuthState("guest");
     }
@@ -221,12 +224,12 @@ export default function HomePage() {
         </header>
 
         <div key={active} className="view-transition">
-        {active === "Início" && <DashboardView firstName={(user?.name ?? "Elias").split(" ")[0]} timezone={user?.timezone ?? "America/Sao_Paulo"} dashboard={dashboard} tasks={tasks} subjects={subjects} toggleTask={toggleTask} openTaskModal={() => { setTaskDefaultDate(today); setModal("task"); }} openSession={() => { setStudyTask(null); setModal("session"); }} startFocus={() => { setStudyTask(null); setActive("Foco"); }} startTask={(task) => { if (task.origin === "AUTOMATIC_REVIEW") { setActive("Revisões"); showNotice("Registre o resultado pela Central de revisões."); } else { setStudyTask(task); setActive("Foco"); } }} goTo={setActive} />}
+        {active === "Início" && <DashboardView firstName={(user?.name ?? "Elias").split(" ")[0]} timezone={user?.timezone ?? "America/Sao_Paulo"} dashboard={dashboard} tasks={tasks} subjects={subjects} toggleTask={toggleTask} openTaskModal={() => { setTaskDefaultDate(today); setModal("task"); }} openSession={() => { setStudyTask(null); setSessionTask(null); setModal("session"); }} startFocus={() => { setStudyTask(null); setSessionTask(null); setActive("Foco"); }} startTask={(task) => { if (task.origin === "AUTOMATIC_REVIEW") { setActive("Revisões"); showNotice("Registre o resultado pela Central de revisões."); } else { setStudyTask(task); setSessionTask(null); setActive("Foco"); } }} goTo={setActive} />}
         {active === "Disciplinas" && <SubjectsView subjects={subjects} isDemo={authState === "demo"} setModal={setModal} onUpdate={(next) => { setSubjects(current => current.map(item => item.id === next.id ? next : item)); showNotice("Disciplina atualizada."); }} onArchive={(next) => { setSubjects(current => current.filter(item => item.id !== next.id)); showNotice("Disciplina arquivada sem apagar o histórico."); }} onRestore={(next) => { setSubjects(current => [...current.filter(item => item.id !== next.id), next].sort((a, b) => a.name.localeCompare(b.name))); showNotice("Disciplina restaurada."); }} />}
         {active === "Calendário" && <CalendarView tasks={tasks} subjects={subjects} isDemo={authState === "demo"} revision={taskRevision} toggleTask={toggleTask} openTaskModal={(date) => { setTaskDefaultDate(date); setModal("task"); }} onTaskChanged={(next) => { setTasks(current => [...current.filter(item => item.id !== next.id), ...(next.date === today ? [next] : [])]); setTaskRevision(value => value + 1); showNotice("Tarefa atualizada."); }} onTaskDeleted={(id) => { setTasks(current => current.filter(item => item.id !== id)); setTaskRevision(value => value + 1); showNotice("Tarefa excluída."); }} />}
         {active === "Revisões" && <ReviewsView isDemo={authState === "demo"} subjects={subjects} revision={taskRevision} onChanged={() => { setTaskRevision(value => value + 1); showNotice("Revisão atualizada."); }} />}
         {active === "Histórico" && <SessionHistoryView isDemo={authState === "demo"} subjects={subjects} onChanged={() => { setTaskRevision(value => value + 1); if (authState === "authenticated") fetch(`${API_URL}/dashboard`, { cache: "no-store" }).then(response => response.json()).then(next => { setDashboard(next); setTasks(next.todayTasks); }); showNotice("Histórico e indicadores atualizados."); }} />}
-        {active === "Foco" && <FocusView key={`focus-${authState === "authenticated" ? user?.id : "demo"}`} storageKey={`studyflow-timer:${authState === "authenticated" ? user?.id : "demo"}`} task={studyTask} subject={subjects.find(subject => subject.id === studyTask?.subjectId)} initialSettings={focusPreferences} onSettingsChange={(next) => setFocusPreferences(current => ({ ...current, ...next }))} persistSettings={authState === "authenticated"} goalMinutes={Math.max(25, Math.round(dashboard.weeklyGoalMinutes / 6))} studiedToday={dashboard.activity.find(item => item.date === today)?.minutes ?? 0} onSave={(minutes) => { setFocusMinutes(minutes); setModal("focusSession"); }} />}
+        {active === "Foco" && <FocusView key={`focus-${authState === "authenticated" ? user?.id : "demo"}`} storageKey={`studyflow-timer:${authState === "authenticated" ? user?.id : "demo"}`} task={studyTask} subject={subjects.find(subject => subject.id === studyTask?.subjectId)} initialSettings={focusPreferences} onSettingsChange={(next) => setFocusPreferences(current => ({ ...current, ...next }))} persistSettings={authState === "authenticated"} goalMinutes={Math.max(25, Math.round(dashboard.weeklyGoalMinutes / 6))} studiedToday={dashboard.activity.find(item => item.date === today)?.minutes ?? 0} onSave={(minutes, linkedTask) => { setFocusMinutes(minutes); setSessionTask(linkedTask); setModal("focusSession"); }} />}
         {active === "Desempenho" && <PerformanceView isDemo={authState === "demo"} subjects={subjects} dashboard={dashboard} />}
         {active === "Metas" && <GoalsView isDemo={authState === "demo"} dashboard={dashboard} onGoalSaved={(goal) => setDashboard(current => ({ ...current, weeklyGoalMinutes: goal.targetMinutes, weeklyGoalQuestions: goal.targetQuestions, targetAccuracy: goal.targetAccuracy }))} showNotice={showNotice} />}
         {active === "Configurações" && (user ? <ProfileSettings user={user} preferences={focusPreferences} onPreferencesUpdate={setFocusPreferences} onUpdate={setUser} onPasswordChanged={logout} showNotice={showNotice} /> : <ComingSoon title="Configurações da demonstração" />)}
@@ -234,7 +237,7 @@ export default function HomePage() {
         </div>
       </main>
 
-      {modal && <Modal type={modal} subjects={subjects} isDemo={authState === "demo"} focusMinutes={focusMinutes} defaultTaskDate={taskDefaultDate} sessionTask={modal === "session" || modal === "focusSession" ? studyTask : null} close={() => setModal(null)} addSubject={(subject) => { setSubjects([...subjects, subject]); setModal(null); showNotice("Disciplina criada com sucesso!"); }} addTask={(task) => { if (authState === "demo" || task.date === today) setTasks(current => [...current, task]); setTaskRevision(value => value + 1); setModal(null); showNotice(task.date === today ? "Tarefa adicionada ao plano de hoje!" : "Tarefa adicionada ao calendário!"); }} saveSession={completeSession} />}
+      {modal && <Modal key={`${modal}-${sessionTask?.id ?? "standalone"}`} type={modal} subjects={subjects} isDemo={authState === "demo"} focusMinutes={focusMinutes} defaultTaskDate={taskDefaultDate} sessionTask={modal === "focusSession" ? sessionTask : null} close={() => { setModal(null); setSessionTask(null); }} addSubject={(subject) => { setSubjects([...subjects, subject]); setModal(null); showNotice("Disciplina criada com sucesso!"); }} addTask={(task) => { if (authState === "demo" || task.date === today) setTasks(current => [...current, task]); setTaskRevision(value => value + 1); setModal(null); showNotice(task.date === today ? "Tarefa adicionada ao plano de hoje!" : "Tarefa adicionada ao calendário!"); }} saveSession={completeSession} />}
       {notice && <div className="toast" role="status"><Check size={18} />{notice}</div>}
     </div>
   );
@@ -553,7 +556,7 @@ function playCompletionTone() {
   } catch { /* O aviso visual continua disponível quando o áudio não é suportado. */ }
 }
 
-function FocusView({ storageKey, task, subject, onSave, goalMinutes, studiedToday, initialSettings, onSettingsChange, persistSettings }: { storageKey: string; task: Task | null; subject?: Subject; onSave: (minutes: number) => void; goalMinutes: number; studiedToday: number; initialSettings: AccountPreferences; onSettingsChange: (settings: FocusSettings) => void; persistSettings: boolean }) {
+function FocusView({ storageKey, task, subject, onSave, goalMinutes, studiedToday, initialSettings, onSettingsChange, persistSettings }: { storageKey: string; task: Task | null; subject?: Subject; onSave: (minutes: number, task: Task | null) => void; goalMinutes: number; studiedToday: number; initialSettings: AccountPreferences; onSettingsChange: (settings: FocusSettings) => void; persistSettings: boolean }) {
   const [settings, setSettings] = useState(initialSettings);
   const [phase, setPhase] = useState<FocusPhase>("FOCUS");
   const [cycle, setCycle] = useState(1);
@@ -639,7 +642,7 @@ function FocusView({ storageKey, task, subject, onSave, goalMinutes, studiedToda
   const record = () => {
     const currentFocusSeconds = phase === "FOCUS" ? Math.max(0, duration - remaining) : 0;
     const minutes = Math.max(1, Math.round((accumulatedFocusSeconds + currentFocusSeconds) / 60));
-    onSave(minutes);
+    onSave(minutes, task);
   };
   const elapsedSeconds = duration - remaining;
   const angle = duration === 0 ? 0 : elapsedSeconds / duration * 360;
@@ -953,9 +956,15 @@ function Modal({ type, subjects, isDemo, focusMinutes, defaultTaskDate, sessionT
     }
   };
   const titles = { subject: "Nova disciplina", task: "Planejar tarefa", session: "Registrar estudo", focusSession: "Concluir sessão de foco" };
+  const subjectOptions = subjects
+    .filter(subject => !subject.archived || subject.id === sessionTask?.subjectId)
+    .map(subject => ({ value: subject.id, label: subject.name }));
+  if (sessionTask && !subjectOptions.some(option => option.value === sessionTask.subjectId)) {
+    subjectOptions.unshift({ value: sessionTask.subjectId, label: sessionTask.subjectName ?? "Disciplina da tarefa" });
+  }
   return <div className="modal-backdrop" role="presentation" onMouseDown={close}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">NOVO REGISTRO</span><h2 id="modal-title">{titles[type]}</h2></div><button className="icon-button" onClick={close} aria-label="Fechar"><X /></button></div><form onSubmit={submit}>
     {type === "subject" && <><label>Nome da disciplina<input name="name" required maxLength={80} placeholder="Ex.: Física" autoFocus /></label><fieldset><legend>Cor</legend><div className="color-options">{palette.map((color, index) => <label key={color} style={{ background: color }}><input type="radio" name="color" value={color} defaultChecked={index === 0} /><span><Check /></span></label>)}</div></fieldset></>}
-    {type !== "subject" && <AppSelect label="Disciplina" name="subjectId" defaultValue={sessionTask?.subjectId} options={subjects.filter(subject => !subject.archived).map(subject => ({ value: subject.id, label: subject.name }))} />}
+    {type !== "subject" && <AppSelect label="Disciplina" name="subjectId" defaultValue={sessionTask?.subjectId} options={subjectOptions} />}
     {type === "task" && <><label>Título da tarefa<input name="title" required placeholder="O que você vai estudar?" autoFocus /></label><div className="form-row"><DateField label="Data" name="date" defaultValue={defaultTaskDate} /><AppSelect label="Tipo" name="type" options={[{ value: "FIRST_CONTACT", label: "Primeiro contato" }, { value: "REVIEW", label: "Revisão" }, { value: "EXAM", label: "Prova ou simulado" }, { value: "GENERAL", label: "Geral" }]} /></div></>}
     {(type === "session" || type === "focusSession") && <>{sessionTask && <p className="task-session-context"><Check />Esta sessão concluirá a tarefa <strong>{sessionTask.title}</strong>.</p>}<label>Assunto estudado<input name="topic" required placeholder="Ex.: Função de segundo grau" defaultValue={sessionTask?.title ?? ""} autoFocus={!sessionTask} /></label><div className="form-row"><AppSelect label="Tipo de estudo" name="sessionType" defaultValue={sessionTask ? taskTypeToSessionType(sessionTask.type) : "FIRST_CONTACT"} options={[{ value: "FIRST_CONTACT", label: "Primeiro contato" }, { value: "REVIEW", label: "Revisão" }, { value: "MOCK_EXAM", label: "Simulado" }, { value: "OTHER", label: "Outro" }]} /><DateField label="Data" name="date" defaultValue={today} max={today} /></div><div className="form-row three"><label>Duração (min)<input name="minutes" type="number" min="1" max="1440" required defaultValue={type === "focusSession" ? focusMinutes : 50} /></label><label>Questões<input name="questions" type="number" min="0" defaultValue="0" /></label><label>Acertos<input name="correct" type="number" min="0" defaultValue="0" /></label></div>{type === "focusSession" && <p className="focus-session-hint"><Clock3 />Tempo líquido recuperado do temporizador. Complete os dados para transformar o foco em progresso.</p>}<p className="review-rule-note"><Sparkles />Com questões respondidas, o assunto volta automaticamente: abaixo de 50% em 1 dia; 50–69% em 3; 70–84% em 7; 85% ou mais em 15 dias.</p></>}
     {error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={close}>Cancelar</button><button className="primary" type="submit">Salvar</button></div>
