@@ -63,6 +63,11 @@ const demoDashboard: Dashboard = {
   minutesStudied: 435, questionsAnswered: 128, correctAnswers: 94, accuracy: 73,
   currentStreak: 4, bestStreak: 12, weeklyGoalMinutes: 600, weeklyGoalQuestions: 180, targetAccuracy: 75, activity: initialActivity(), todayTasks: demoTasks,
 };
+const emptyDashboard = (): Dashboard => ({
+  minutesStudied: 0, questionsAnswered: 0, correctAnswers: 0, accuracy: 0,
+  currentStreak: 0, bestStreak: 0, weeklyGoalMinutes: 600, weeklyGoalQuestions: 180, targetAccuracy: 75,
+  activity: initialActivity().map(item => ({ ...item, minutes: 0 })), todayTasks: [],
+});
 const demoNotificationCenter: NotificationCenterData = { unreadCount: 2, notifications: [
   { id: "demo-notification-1", type: "REVIEW_TODAY", title: "Revisão para hoje", message: "Biologia: citologia", actionTarget: "REVIEWS", read: false, createdAt: new Date().toISOString() },
   { id: "demo-notification-2", type: "TASK_TODAY", title: "Tarefa para hoje", message: "Matemática: funções e gráficos", actionTarget: "CALENDAR", read: false, createdAt: new Date(Date.now() - 3600000).toISOString() },
@@ -86,19 +91,34 @@ export default function HomePage() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [focusPreferences, setFocusPreferences] = useState<AccountPreferences>(defaultFocusSettings);
 
+  const prepareAuthenticatedAccount = useCallback((nextUser: User) => {
+    setUser(nextUser); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null);
+    setModal(null); setActive("Início"); setFocusMinutes(defaultFocusSettings.focusMinutes); setFocusPreferences(defaultFocusSettings);
+    setNotificationCenter({ unreadCount: 0, notifications: [] }); setNotificationsOpen(false); setMobileMenu(false); setNotice("");
+    setAuthState("authenticated");
+  }, []);
+
+  const prepareDemoAccount = useCallback(() => {
+    setUser(null); setDashboard(demoDashboard); setSubjects(demoSubjects); setTasks(demoTasks); setStudyTask(null);
+    setModal(null); setActive("Início"); setFocusMinutes(defaultFocusSettings.focusMinutes); setFocusPreferences(defaultFocusSettings);
+    setNotificationCenter(demoNotificationCenter); setNotificationsOpen(false); setMobileMenu(false); setNotice("");
+    setAuthState("demo");
+  }, []);
+
   useEffect(() => {
     fetch("/api/auth/session", { cache: "no-store" })
       .then(response => response.json())
       .then(session => {
-        if (session.authenticated) { setUser(session.user); setAuthState("authenticated"); }
+        if (session.authenticated) prepareAuthenticatedAccount(session.user);
         else setAuthState("guest");
       })
       .catch(() => setAuthState("guest"));
-  }, []);
+  }, [prepareAuthenticatedAccount]);
 
   useEffect(() => {
-    if (authState !== "authenticated") return;
-    Promise.all([fetch(`${API_URL}/dashboard`), fetch(`${API_URL}/subjects`), fetch(`${API_URL}/notifications`), fetch(`${API_URL}/preferences`)])
+    if (authState !== "authenticated" || !user?.id) return;
+    const controller = new AbortController();
+    Promise.all([fetch(`${API_URL}/dashboard`, { signal: controller.signal }), fetch(`${API_URL}/subjects`, { signal: controller.signal }), fetch(`${API_URL}/notifications`, { signal: controller.signal }), fetch(`${API_URL}/preferences`, { signal: controller.signal })])
       .then(async ([dashboardResponse, subjectsResponse, notificationsResponse, preferencesResponse]) => {
         if (!dashboardResponse.ok || !subjectsResponse.ok || !notificationsResponse.ok || !preferencesResponse.ok) throw new Error();
         const [nextDashboard, nextSubjects, nextNotifications, nextPreferences] = await Promise.all([dashboardResponse.json(), subjectsResponse.json(), notificationsResponse.json(), preferencesResponse.json()]);
@@ -108,8 +128,9 @@ export default function HomePage() {
         setNotificationCenter(nextNotifications);
         setFocusPreferences(nextPreferences);
       })
-      .catch(() => setAuthState("guest"));
-  }, [authState]);
+      .catch(error => { if (error instanceof Error && error.name !== "AbortError") setAuthState("guest"); });
+    return () => controller.abort();
+  }, [authState, user?.id]);
 
   const showNotice = (message: string) => {
     setNotice(message);
@@ -159,8 +180,12 @@ export default function HomePage() {
   };
 
   const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setUser(null); setAuthState("guest");
+    try { await fetch("/api/auth/logout", { method: "POST" }); }
+    finally {
+      setUser(null); setDashboard(emptyDashboard()); setSubjects([]); setTasks([]); setStudyTask(null); setModal(null);
+      setActive("Início"); setNotificationCenter({ unreadCount: 0, notifications: [] }); setNotificationsOpen(false); setNotice("");
+      setAuthState("guest");
+    }
   };
 
   const toggleNotifications = async () => {
@@ -173,7 +198,7 @@ export default function HomePage() {
   };
 
   if (authState === "checking") return <LoadingScreen />;
-  if (authState === "guest") return <AuthScreen onAuthenticated={(nextUser) => { setUser(nextUser); setAuthState("authenticated"); }} onDemo={() => setAuthState("demo")} />;
+  if (authState === "guest") return <AuthScreen onAuthenticated={prepareAuthenticatedAccount} onDemo={prepareDemoAccount} />;
   if (authState === "authenticated" && user && (!user.targetExamName || !user.targetExamDate)) {
     return <OnboardingScreen user={user} onComplete={(nextUser, nextSubjects) => {
       setUser(nextUser); setSubjects(nextSubjects); setTasks([]);
@@ -185,7 +210,7 @@ export default function HomePage() {
 
   return (
     <div className="app-shell">
-      <Sidebar active={active} setActive={setActive} open={mobileMenu} close={() => setMobileMenu(false)} onLogout={authState === "authenticated" ? logout : () => setAuthState("guest")} />
+      <Sidebar active={active} setActive={setActive} open={mobileMenu} close={() => setMobileMenu(false)} onLogout={logout} />
       <main className="main">
         <header className="topbar">
           <button className="icon-button mobile-only" aria-label="Abrir menu" onClick={() => setMobileMenu(true)}><Menu /></button>
@@ -201,7 +226,7 @@ export default function HomePage() {
         {active === "Calendário" && <CalendarView tasks={tasks} subjects={subjects} isDemo={authState === "demo"} revision={taskRevision} toggleTask={toggleTask} openTaskModal={(date) => { setTaskDefaultDate(date); setModal("task"); }} onTaskChanged={(next) => { setTasks(current => [...current.filter(item => item.id !== next.id), ...(next.date === today ? [next] : [])]); setTaskRevision(value => value + 1); showNotice("Tarefa atualizada."); }} onTaskDeleted={(id) => { setTasks(current => current.filter(item => item.id !== id)); setTaskRevision(value => value + 1); showNotice("Tarefa excluída."); }} />}
         {active === "Revisões" && <ReviewsView isDemo={authState === "demo"} subjects={subjects} revision={taskRevision} onChanged={() => { setTaskRevision(value => value + 1); showNotice("Revisão atualizada."); }} />}
         {active === "Histórico" && <SessionHistoryView isDemo={authState === "demo"} subjects={subjects} onChanged={() => { setTaskRevision(value => value + 1); if (authState === "authenticated") fetch(`${API_URL}/dashboard`, { cache: "no-store" }).then(response => response.json()).then(next => { setDashboard(next); setTasks(next.todayTasks); }); showNotice("Histórico e indicadores atualizados."); }} />}
-        {active === "Foco" && <FocusView task={studyTask} subject={subjects.find(subject => subject.id === studyTask?.subjectId)} initialSettings={focusPreferences} onSettingsChange={(next) => setFocusPreferences(current => ({ ...current, ...next }))} persistSettings={authState === "authenticated"} goalMinutes={Math.max(25, Math.round(dashboard.weeklyGoalMinutes / 6))} studiedToday={dashboard.activity.find(item => item.date === today)?.minutes ?? 0} onSave={(minutes) => { setFocusMinutes(minutes); setModal("focusSession"); }} />}
+        {active === "Foco" && <FocusView key={`focus-${authState === "authenticated" ? user?.id : "demo"}`} storageKey={`studyflow-timer:${authState === "authenticated" ? user?.id : "demo"}`} task={studyTask} subject={subjects.find(subject => subject.id === studyTask?.subjectId)} initialSettings={focusPreferences} onSettingsChange={(next) => setFocusPreferences(current => ({ ...current, ...next }))} persistSettings={authState === "authenticated"} goalMinutes={Math.max(25, Math.round(dashboard.weeklyGoalMinutes / 6))} studiedToday={dashboard.activity.find(item => item.date === today)?.minutes ?? 0} onSave={(minutes) => { setFocusMinutes(minutes); setModal("focusSession"); }} />}
         {active === "Desempenho" && <PerformanceView isDemo={authState === "demo"} subjects={subjects} dashboard={dashboard} />}
         {active === "Metas" && <GoalsView isDemo={authState === "demo"} dashboard={dashboard} onGoalSaved={(goal) => setDashboard(current => ({ ...current, weeklyGoalMinutes: goal.targetMinutes, weeklyGoalQuestions: goal.targetQuestions, targetAccuracy: goal.targetAccuracy }))} showNotice={showNotice} />}
         {active === "Configurações" && (user ? <ProfileSettings user={user} preferences={focusPreferences} onPreferencesUpdate={setFocusPreferences} onUpdate={setUser} onPasswordChanged={logout} showNotice={showNotice} /> : <ComingSoon title="Configurações da demonstração" />)}
@@ -528,7 +553,7 @@ function playCompletionTone() {
   } catch { /* O aviso visual continua disponível quando o áudio não é suportado. */ }
 }
 
-function FocusView({ task, subject, onSave, goalMinutes, studiedToday, initialSettings, onSettingsChange, persistSettings }: { task: Task | null; subject?: Subject; onSave: (minutes: number) => void; goalMinutes: number; studiedToday: number; initialSettings: AccountPreferences; onSettingsChange: (settings: FocusSettings) => void; persistSettings: boolean }) {
+function FocusView({ storageKey, task, subject, onSave, goalMinutes, studiedToday, initialSettings, onSettingsChange, persistSettings }: { storageKey: string; task: Task | null; subject?: Subject; onSave: (minutes: number) => void; goalMinutes: number; studiedToday: number; initialSettings: AccountPreferences; onSettingsChange: (settings: FocusSettings) => void; persistSettings: boolean }) {
   const [settings, setSettings] = useState(initialSettings);
   const [phase, setPhase] = useState<FocusPhase>("FOCUS");
   const [cycle, setCycle] = useState(1);
@@ -555,7 +580,8 @@ function FocusView({ task, subject, onSave, goalMinutes, studiedToday, initialSe
   useEffect(() => {
     const restore = window.setTimeout(() => {
       try {
-        const saved = localStorage.getItem("studyflow-timer");
+        localStorage.removeItem("studyflow-timer");
+        const saved = localStorage.getItem(storageKey);
         if (!saved) return;
         const state = JSON.parse(saved) as { endsAt: number | null; remaining: number; duration: number; running: boolean; phase: FocusPhase; cycle: number; settings: FocusSettings; accumulatedFocusSeconds?: number };
         const next = state.running && state.endsAt ? Math.max(0, Math.ceil((state.endsAt - Date.now()) / 1000)) : state.remaining;
@@ -564,12 +590,12 @@ function FocusView({ task, subject, onSave, goalMinutes, studiedToday, initialSe
         setAccumulatedFocusSeconds(Math.max(0, state.accumulatedFocusSeconds ?? 0));
         setRemaining(next); setEndsAt(next > 0 && state.running ? state.endsAt : null); setRunning(next > 0 && state.running);
         if (state.running && next === 0) {
-          localStorage.setItem("studyflow-timer", JSON.stringify({ ...state, remaining: 0, running: false, endsAt: null }));
+          localStorage.setItem(storageKey, JSON.stringify({ ...state, remaining: 0, running: false, endsAt: null }));
         }
-      } catch { localStorage.removeItem("studyflow-timer"); }
+      } catch { localStorage.removeItem(storageKey); }
     }, 0);
     return () => window.clearTimeout(restore);
-  }, [initialSettings]);
+  }, [initialSettings, storageKey]);
 
   useEffect(() => {
     if (!running || !endsAt) return;
@@ -579,16 +605,16 @@ function FocusView({ task, subject, onSave, goalMinutes, studiedToday, initialSe
       if (next === 0) {
         setRunning(false); setEndsAt(null);
         if (!completionAlerted.current) { completionAlerted.current = true; notifyPeriodComplete(); }
-        localStorage.setItem("studyflow-timer", JSON.stringify({
+        localStorage.setItem(storageKey, JSON.stringify({
           duration, phase, cycle, settings, accumulatedFocusSeconds, remaining: 0, running: false, endsAt: null,
         }));
       }
     };
     const interval = window.setInterval(update, 500); update();
     return () => window.clearInterval(interval);
-  }, [running, endsAt, duration, phase, cycle, settings, accumulatedFocusSeconds, notifyPeriodComplete]);
+  }, [running, endsAt, duration, phase, cycle, settings, accumulatedFocusSeconds, notifyPeriodComplete, storageKey]);
 
-  const store = useCallback((next: { running: boolean; endsAt: number | null; remaining: number; duration?: number; phase?: FocusPhase; cycle?: number; settings?: FocusSettings; accumulatedFocusSeconds?: number }) => localStorage.setItem("studyflow-timer", JSON.stringify({ duration, phase, cycle, settings, accumulatedFocusSeconds, ...next })), [accumulatedFocusSeconds, cycle, duration, phase, settings]);
+  const store = useCallback((next: { running: boolean; endsAt: number | null; remaining: number; duration?: number; phase?: FocusPhase; cycle?: number; settings?: FocusSettings; accumulatedFocusSeconds?: number }) => localStorage.setItem(storageKey, JSON.stringify({ duration, phase, cycle, settings, accumulatedFocusSeconds, ...next })), [accumulatedFocusSeconds, cycle, duration, phase, settings, storageKey]);
   const toggle = () => {
     if (running) { const next = endsAt ? Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)) : remaining; setRemaining(next); setRunning(false); setEndsAt(null); store({ running: false, endsAt: null, remaining: next }); }
     else { completionAlerted.current = false; setCompletionNotice(""); const nextEnd = Date.now() + remaining * 1000; setEndsAt(nextEnd); setRunning(true); store({ running: true, endsAt: nextEnd, remaining }); }
