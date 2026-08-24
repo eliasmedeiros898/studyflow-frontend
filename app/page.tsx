@@ -7,6 +7,7 @@ import {
   Coffee, SlidersHorizontal, History, RotateCcw, AlertCircle
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type Subject = { id: string; name: string; color: string; archived: boolean };
 type Task = { id: string; subjectId: string; subjectName?: string; subjectColor?: string; title: string; date: string; type: string; completed: boolean; origin?: "MANUAL" | "AUTOMATIC_REVIEW"; sourceSessionId?: string | null };
@@ -670,19 +671,57 @@ function addDays(date: string, days: number) {
 
 type SelectOption = { value: string; label: string };
 
+type FloatingPosition = { top: number; left: number; width: number; placement: "top" | "bottom" };
+
+function getFloatingPosition(trigger: HTMLElement, preferredWidth: number, estimatedHeight: number): FloatingPosition {
+  const viewportGutter = 12;
+  const triggerGap = 7;
+  const rect = trigger.getBoundingClientRect();
+  const width = Math.min(preferredWidth, window.innerWidth - viewportGutter * 2);
+  const left = Math.min(Math.max(viewportGutter, rect.left), window.innerWidth - width - viewportGutter);
+  const hasRoomBelow = rect.bottom + triggerGap + estimatedHeight <= window.innerHeight - viewportGutter;
+  return {
+    top: hasRoomBelow ? rect.bottom + triggerGap : Math.max(viewportGutter, rect.top - triggerGap - estimatedHeight),
+    left,
+    width,
+    placement: hasRoomBelow ? "bottom" : "top",
+  };
+}
+
 function AppSelect({ label, name, options, value, defaultValue, onChange }: { label: string; name?: string; options: SelectOption[]; value?: string; defaultValue?: string; onChange?: (value: string) => void }) {
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const surface = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<FloatingPosition | null>(null);
   const [internalValue, setInternalValue] = useState(defaultValue ?? options[0]?.value ?? "");
   const selectedValue = value ?? internalValue;
   const selected = options.find(option => option.value === selectedValue) ?? options[0];
+  const updatePosition = useCallback(() => {
+    if (!trigger.current) return;
+    const menuHeight = Math.min(240, options.length * 38 + 12);
+    setPosition(getFloatingPosition(trigger.current, trigger.current.getBoundingClientRect().width, menuHeight));
+  }, [options.length]);
   useEffect(() => {
-    const closeOutside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!root.current?.contains(target) && !surface.current?.contains(target)) setOpen(false);
+    };
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
   const choose = (next: string) => { setInternalValue(next); onChange?.(next); setOpen(false); };
-  return <div className="app-field app-select-root" ref={root}><span className="app-field-label">{label}</span>{name && <input type="hidden" name={name} value={selectedValue} />}<button type="button" className="app-field-trigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(current => !current)}><span>{selected?.label}</span><ChevronDown /></button>{open && <div className="app-select-menu" role="listbox" aria-label={label}>{options.map(option => <button type="button" role="option" aria-selected={option.value === selectedValue} className={option.value === selectedValue ? "selected" : ""} key={option.value} onClick={() => choose(option.value)}><span>{option.label}</span>{option.value === selectedValue && <Check />}</button>)}</div>}</div>;
+  const toggle = () => { if (open) setOpen(false); else { updatePosition(); setOpen(true); } };
+  return <div className="app-field app-select-root" ref={root}><span className="app-field-label">{label}</span>{name && <input type="hidden" name={name} value={selectedValue} />}<button ref={trigger} type="button" className="app-field-trigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={toggle}><span>{selected?.label}</span><ChevronDown /></button>{open && position && typeof document !== "undefined" && createPortal(<div ref={surface} className="app-select-menu app-floating-surface" data-placement={position.placement} style={{ top: position.top, left: position.left, width: position.width }} role="listbox" aria-label={label}>{options.map(option => <button type="button" role="option" aria-selected={option.value === selectedValue} className={option.value === selectedValue ? "selected" : ""} key={option.value} onClick={() => choose(option.value)}><span>{option.label}</span>{option.value === selectedValue && <Check />}</button>)}</div>, document.body)}</div>;
 }
 
 function isoLocal(date: Date) {
@@ -694,23 +733,43 @@ function isoLocal(date: Date) {
 
 function DateField({ label, name, value, defaultValue, min, max, onChange }: { label: string; name?: string; value?: string; defaultValue?: string; min?: string; max?: string; onChange?: (value: string) => void }) {
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const surface = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<FloatingPosition | null>(null);
   const [internalValue, setInternalValue] = useState(defaultValue ?? "");
   const selectedValue = value ?? internalValue;
   const initial = selectedValue || min || today;
   const [visibleMonth, setVisibleMonth] = useState(() => { const date = new Date(`${initial}T12:00:00`); return new Date(date.getFullYear(), date.getMonth(), 1, 12); });
+  const updatePosition = useCallback(() => {
+    if (!trigger.current) return;
+    setPosition(getFloatingPosition(trigger.current, 300, 342));
+  }, []);
   useEffect(() => {
-    const closeOutside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!root.current?.contains(target) && !surface.current?.contains(target)) setOpen(false);
+    };
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
   const first = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1, 12);
   const gridStart = new Date(first); gridStart.setDate(first.getDate() - first.getDay());
   const days = Array.from({ length: 42 }, (_, index) => { const date = new Date(gridStart); date.setDate(gridStart.getDate() + index); return date; });
   const choose = (next: string) => { setInternalValue(next); onChange?.(next); setOpen(false); };
   const display = selectedValue ? new Date(`${selectedValue}T12:00:00`).toLocaleDateString("pt-BR") : "dd/mm/aaaa";
   const canUseToday = (!min || today >= min) && (!max || today <= max);
-  return <div className="app-field app-date-root" ref={root}><span className="app-field-label">{label}</span>{name && <input type="hidden" name={name} value={selectedValue} />}<button type="button" className="app-field-trigger app-date-trigger" aria-label={`${label}: ${display}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(current => !current)}><span className={selectedValue ? "" : "placeholder"}>{display}</span><CalendarDays /></button>{open && <div className="app-date-popover" role="dialog" aria-label={`Escolher ${label.toLowerCase()}`}><div className="app-date-heading"><button type="button" aria-label="Mês anterior" onClick={() => setVisibleMonth(current => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12))}><ChevronLeft /></button><strong>{visibleMonth.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</strong><button type="button" aria-label="Próximo mês" onClick={() => setVisibleMonth(current => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12))}><ChevronRight /></button></div><div className="app-date-week">{["D", "S", "T", "Q", "Q", "S", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="app-date-grid">{days.map(date => { const iso = isoLocal(date); const disabled = (!!min && iso < min) || (!!max && iso > max); const outside = date.getMonth() !== visibleMonth.getMonth(); return <button type="button" key={iso} disabled={disabled} className={`${outside ? "outside" : ""} ${iso === today ? "today" : ""} ${iso === selectedValue ? "selected" : ""}`} aria-label={date.toLocaleDateString("pt-BR")} aria-pressed={iso === selectedValue} onClick={() => choose(iso)}>{date.getDate()}</button>; })}</div><div className="app-date-footer"><button type="button" disabled={!selectedValue} onClick={() => choose("")}>Limpar</button><button type="button" disabled={!canUseToday} onClick={() => choose(today)}>Hoje</button></div></div>}</div>;
+  const toggle = () => { if (open) setOpen(false); else { updatePosition(); setOpen(true); } };
+  return <div className="app-field app-date-root" ref={root}><span className="app-field-label">{label}</span>{name && <input type="hidden" name={name} value={selectedValue} />}<button ref={trigger} type="button" className="app-field-trigger app-date-trigger" aria-label={`${label}: ${display}`} aria-haspopup="dialog" aria-expanded={open} onClick={toggle}><span className={selectedValue ? "" : "placeholder"}>{display}</span><CalendarDays /></button>{open && position && typeof document !== "undefined" && createPortal(<div ref={surface} className="app-date-popover app-floating-surface" data-placement={position.placement} style={{ top: position.top, left: position.left, width: position.width }} role="dialog" aria-label={`Escolher ${label.toLowerCase()}`}><div className="app-date-heading"><button type="button" aria-label="Mês anterior" onClick={() => setVisibleMonth(current => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12))}><ChevronLeft /></button><strong>{visibleMonth.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</strong><button type="button" aria-label="Próximo mês" onClick={() => setVisibleMonth(current => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12))}><ChevronRight /></button></div><div className="app-date-week">{["D", "S", "T", "Q", "Q", "S", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="app-date-grid">{days.map(date => { const iso = isoLocal(date); const disabled = (!!min && iso < min) || (!!max && iso > max); const outside = date.getMonth() !== visibleMonth.getMonth(); return <button type="button" key={iso} disabled={disabled} className={`${outside ? "outside" : ""} ${iso === today ? "today" : ""} ${iso === selectedValue ? "selected" : ""}`} aria-label={date.toLocaleDateString("pt-BR")} aria-pressed={iso === selectedValue} onClick={() => choose(iso)}>{date.getDate()}</button>; })}</div><div className="app-date-footer"><button type="button" disabled={!selectedValue} onClick={() => choose("")}>Limpar</button><button type="button" disabled={!canUseToday} onClick={() => choose(today)}>Hoje</button></div></div>, document.body)}</div>;
 }
 
 
